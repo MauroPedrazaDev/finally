@@ -18,24 +18,40 @@ class PriceCache:
     def __init__(self) -> None:
         self._prices: dict[str, PriceUpdate] = {}
         self._lock = Lock()
-        self._version: int = 0  # Monotonically increasing; bumped on every update
+        self._version: int = 0  # Monotonically increasing; bumped on every update/removal
 
-    def update(self, ticker: str, price: float, timestamp: float | None = None) -> PriceUpdate:
+    def update(
+        self,
+        ticker: str,
+        price: float,
+        timestamp: float | None = None,
+        session_open: float | None = None,
+    ) -> PriceUpdate:
         """Record a new price for a ticker. Returns the created PriceUpdate.
 
         Automatically computes direction and change from the previous price.
         If this is the first update for the ticker, previous_price == price (direction='flat').
+
+        session_open is only honored on the first write for a ticker (explicit value if
+        > 0, otherwise the price); later writes carry the stored session open forward.
         """
         with self._lock:
             ts = timestamp or time.time()
             prev = self._prices.get(ticker)
             previous_price = prev.price if prev else price
+            if prev is not None:
+                open_price = prev.session_open
+            elif session_open is not None and session_open > 0:
+                open_price = round(session_open, 2)
+            else:
+                open_price = round(price, 2)
 
             update = PriceUpdate(
                 ticker=ticker,
                 price=round(price, 2),
                 previous_price=round(previous_price, 2),
                 timestamp=ts,
+                session_open=open_price,
             )
             self._prices[ticker] = update
             self._version += 1
@@ -57,9 +73,14 @@ class PriceCache:
         return update.price if update else None
 
     def remove(self, ticker: str) -> None:
-        """Remove a ticker from the cache (e.g., when removed from watchlist)."""
+        """Remove a ticker from the cache (e.g., when no longer tracked).
+
+        Bumps the version so SSE clients see the removal promptly. A re-added
+        ticker gets a fresh session open.
+        """
         with self._lock:
-            self._prices.pop(ticker, None)
+            if self._prices.pop(ticker, None) is not None:
+                self._version += 1
 
     @property
     def version(self) -> int:

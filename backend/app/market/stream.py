@@ -14,20 +14,23 @@ from .cache import PriceCache
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/stream", tags=["streaming"])
 
-
-def create_stream_router(price_cache: PriceCache) -> APIRouter:
+def create_stream_router(price_cache: PriceCache, interval: float = 0.5) -> APIRouter:
     """Create the SSE streaming router with a reference to the price cache.
 
-    This factory pattern lets us inject the PriceCache without globals.
+    This factory pattern lets us inject the PriceCache without globals. The
+    router is created per call, so building the app twice (e.g. in tests)
+    doesn't register /prices twice.
     """
+    router = APIRouter(prefix="/api/stream", tags=["streaming"])
 
     @router.get("/prices")
     async def stream_prices(request: Request) -> StreamingResponse:
         """SSE endpoint for live price updates.
 
-        Streams all tracked ticker prices every ~500ms. The client connects
+        Sends one event with all tracked tickers whenever the cache version
+        changes (checked every ~500ms). The first event after (re)connecting is
+        the full current snapshot. The client connects
         with EventSource and receives events in the format:
 
             data: {"AAPL": {"ticker": "AAPL", "price": 190.50, ...}, ...}
@@ -36,7 +39,7 @@ def create_stream_router(price_cache: PriceCache) -> APIRouter:
         disconnection (EventSource built-in behavior).
         """
         return StreamingResponse(
-            _generate_events(price_cache, request),
+            _generate_events(price_cache, request, interval),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -55,7 +58,8 @@ async def _generate_events(
 ) -> AsyncGenerator[str, None]:
     """Async generator that yields SSE-formatted price events.
 
-    Sends all prices every `interval` seconds. Stops when the client
+    Checks the cache version every `interval` seconds and sends all prices
+    whenever it changed. Stops when the client
     disconnects (detected via request.is_disconnected()).
     """
     # Tell the client to retry after 1 second if the connection drops

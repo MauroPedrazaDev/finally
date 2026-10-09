@@ -5,6 +5,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 
+class MarketDataError(Exception):
+    """A market data provider request failed (network error, unexpected status)."""
+
+
+class MarketDataRateLimitError(MarketDataError):
+    """The market data provider rejected a request with HTTP 429."""
+
+
+class MarketDataAuthError(MarketDataError):
+    """The market data provider rejected the API key or plan (HTTP 401/403)."""
+
+
 class MarketDataSource(ABC):
     """Contract for market data providers.
 
@@ -14,8 +26,9 @@ class MarketDataSource(ABC):
 
     Lifecycle:
         source = create_market_data_source(cache)
-        await source.start(["AAPL", "GOOGL", ...])
+        await source.start(["AAPL", "GOOGL", ...], initial_prices={"AAPL": 191.2})
         # ... app runs ...
+        await source.validate_ticker("PYPL")
         await source.add_ticker("TSLA")
         await source.remove_ticker("GOOGL")
         # ... app shutting down ...
@@ -23,10 +36,14 @@ class MarketDataSource(ABC):
     """
 
     @abstractmethod
-    async def start(self, tickers: list[str]) -> None:
+    async def start(
+        self, tickers: list[str], initial_prices: dict[str, float] | None = None
+    ) -> None:
         """Begin producing price updates for the given tickers.
 
         Starts a background task that periodically writes to the PriceCache.
+        `initial_prices` lets sources that generate prices (the simulator) resume
+        from known values, e.g. the last trade price of held tickers.
         Must be called exactly once. Calling start() twice is undefined behavior.
         """
 
@@ -50,6 +67,14 @@ class MarketDataSource(ABC):
         """Remove a ticker from the active set. No-op if not present.
 
         Also removes the ticker from the PriceCache.
+        """
+
+    @abstractmethod
+    async def validate_ticker(self, ticker: str) -> bool:
+        """Return True if the ticker exists and can be priced.
+
+        Called only for tickers that are not already tracked. Raises
+        MarketDataRateLimitError when the provider rate-limits the check.
         """
 
     @abstractmethod

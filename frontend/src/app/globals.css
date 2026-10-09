@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: #0d1117;
+  color: #d5dce6;
+}
+
+body {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Price flash: a class is applied for ~500ms; the highlight fades out within it. */
+@keyframes flash-up {
+  from { background-color: rgba(38, 179, 107, 0.42); }
+  to { background-color: rgba(38, 179, 107, 0); }
+}
+@keyframes flash-down {
+  from { background-color: rgba(229, 72, 77, 0.42); }
+  to { background-color: rgba(229, 72, 77, 0); }
+}
+.flash-up { animation: flash-up 500ms ease-out; }
+.flash-down { animation: flash-down 500ms ease-out; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot { animation: pulse-dot 1s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flash-up, .flash-down, .pulse-dot { animation-duration: 1ms; }
+}
+
+/* Thin scrollbars that sit inside the panels. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3442 transparent;
+}
+
+:focus-visible {
+  outline: 1px solid #209dd7;
+  outline-offset: 1px;
+}
