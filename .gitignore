@@ -210,3 +210,6 @@ __marimo__/
 db/*.db
 db/*.db-wal
 db/*.db-shm
+
+# Playwright MCP browser artifacts
+.playwright-mcp/

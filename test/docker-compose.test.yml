@@ -1,0 +1,42 @@
+# E2E stack: the app (fresh DB on tmpfs, mock LLM, simulator) + Playwright.
+# Run from the project root:
+#   docker compose -f test/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from playwright
+#   docker compose -f test/docker-compose.test.yml down -v
+# No host ports are published. The service is not named "app": Chromium HSTS-upgrades
+# the bare host "app" (a preloaded TLD) to HTTPS, breaking page navigation.
+
+name: finally-e2e
+
+services:
+  finally:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      LLM_MOCK: "true"
+      MASSIVE_API_KEY: ""
+      OPENROUTER_API_KEY: ""
+      DB_PATH: /data/finally.db
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=4)"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    ipc: host
+    working_dir: /e2e
+    volumes:
+      - ./:/e2e
+      - /e2e/node_modules
+    environment:
+      BASE_URL: http://finally:8000
+      CI: "1"
+    depends_on:
+      finally:
+        condition: service_healthy
+    command: ["sh", "-c", "npm ci && npx playwright test"]

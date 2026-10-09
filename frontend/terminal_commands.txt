@@ -1,0 +1,25 @@
+From the project folder, run this in PowerShell:
+
+```powershell
+.\scripts\start_windows.ps1
+```
+
+It starts the app and opens `http://localhost:8000` in your browser. Docker needs to be running.
+
+otra opcion>
+
+**Terminal 1 — backend:**
+```powershell
+cd .\backend
+$env:DEV_CORS = "true"
+uv run uvicorn app.main:app --reload --port 8000
+```
+
+**Terminal 2 — frontend:**
+```powershell
+cd .\frontend
+$env:NEXT_PUBLIC_API_BASE = "http://localhost:8000"
+npm run dev
+```
+
+Then open **http://localhost:3000**. If needed, run `npm install` in `frontend` first.

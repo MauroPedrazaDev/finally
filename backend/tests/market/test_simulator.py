@@ -52,8 +52,8 @@ class TestGBMSimulator:
         sim = GBMSimulator(tickers=["AAPL"])
         sim.remove_ticker("NOPE")  # Should not raise
 
-    def test_unknown_ticker_gets_random_seed_price(self):
-        """Test that unknown tickers get random seed prices."""
+    def test_unknown_ticker_gets_seed_price_in_range(self):
+        """Test that unknown tickers get a (deterministic) seed price in range."""
         sim = GBMSimulator(tickers=["ZZZZ"])
         price = sim.get_price("ZZZZ")
         assert price is not None

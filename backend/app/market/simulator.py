@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import math
 import random
@@ -23,6 +24,22 @@ from .seed_prices import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Range for deterministic seed prices of tickers without a known seed price
+UNKNOWN_SEED_MIN = 50.0
+UNKNOWN_SEED_MAX = 300.0
+
+
+def seed_price_for(ticker: str) -> float:
+    """Starting price for a ticker: the known seed price, else a stable hash-derived price.
+
+    Uses SHA-256 (not Python's salted hash()) so the price is the same every restart.
+    """
+    if ticker in SEED_PRICES:
+        return SEED_PRICES[ticker]
+    digest = hashlib.sha256(ticker.encode("utf-8")).digest()
+    fraction = int.from_bytes(digest[:8], "big") / 2**64
+    return round(UNKNOWN_SEED_MIN + fraction * (UNKNOWN_SEED_MAX - UNKNOWN_SEED_MIN), 2)
 
 
 class GBMSimulator:
@@ -52,6 +69,7 @@ class GBMSimulator:
         tickers: list[str],
         dt: float = DEFAULT_DT,
         event_probability: float = 0.001,
+        initial_prices: dict[str, float] | None = None,
     ) -> None:
         self._dt = dt
         self._event_prob = event_probability
@@ -65,8 +83,9 @@ class GBMSimulator:
         self._cholesky: np.ndarray | None = None
 
         # Initialize all starting tickers
+        initial_prices = initial_prices or {}
         for ticker in tickers:
-            self._add_ticker_internal(ticker)
+            self._add_ticker_internal(ticker, initial_prices.get(ticker))
         self._rebuild_cholesky()
 
     # --- Public API ---
@@ -143,12 +162,15 @@ class GBMSimulator:
 
     # --- Internals ---
 
-    def _add_ticker_internal(self, ticker: str) -> None:
+    def _add_ticker_internal(self, ticker: str, initial_price: float | None = None) -> None:
         """Add a ticker without rebuilding Cholesky (for batch initialization)."""
         if ticker in self._prices:
             return
         self._tickers.append(ticker)
-        self._prices[ticker] = SEED_PRICES.get(ticker, random.uniform(50.0, 300.0))
+        if initial_price is not None and initial_price > 0:
+            self._prices[ticker] = float(initial_price)
+        else:
+            self._prices[ticker] = seed_price_for(ticker)
         self._params[ticker] = TICKER_PARAMS.get(ticker, dict(DEFAULT_PARAMS))
 
     def _rebuild_cholesky(self) -> None:
@@ -216,10 +238,13 @@ class SimulatorDataSource(MarketDataSource):
         self._sim: GBMSimulator | None = None
         self._task: asyncio.Task | None = None
 
-    async def start(self, tickers: list[str]) -> None:
+    async def start(
+        self, tickers: list[str], initial_prices: dict[str, float] | None = None
+    ) -> None:
         self._sim = GBMSimulator(
             tickers=tickers,
             event_probability=self._event_prob,
+            initial_prices=initial_prices,
         )
         # Seed the cache with initial prices so SSE has data immediately
         for ticker in tickers:
@@ -253,6 +278,10 @@ class SimulatorDataSource(MarketDataSource):
             self._sim.remove_ticker(ticker)
         self._cache.remove(ticker)
         logger.info("Simulator: removed ticker %s", ticker)
+
+    async def validate_ticker(self, ticker: str) -> bool:
+        # The simulator can price any ticker; format is validated upstream.
+        return True
 
     def get_tickers(self) -> list[str]:
         return self._sim.get_tickers() if self._sim else []

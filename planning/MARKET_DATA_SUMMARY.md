@@ -1,6 +1,6 @@
 # Market Data Backend — Summary
 
-**Status:** Complete, tested, reviewed, all issues resolved.
+**Status:** Complete, tested, reviewed. PLAN §6 "Required changes" implemented (see below).
 
 ## What Was Built
 
@@ -25,13 +25,13 @@ MarketDataSource (ABC)
 
 | File | Purpose |
 |------|---------|
-| `models.py` | `PriceUpdate` — immutable frozen dataclass (ticker, price, previous_price, timestamp, change, direction) |
-| `interface.py` | `MarketDataSource` — abstract base class defining `start/stop/add_ticker/remove_ticker/get_tickers` |
+| `models.py` | `PriceUpdate` — immutable frozen dataclass (ticker, price, previous_price, timestamp, session_open; change, direction, session_change_percent) |
+| `interface.py` | `MarketDataSource` — ABC: `start(tickers, initial_prices=None)/stop/add_ticker/remove_ticker/validate_ticker/get_tickers`; errors `MarketDataError` > `MarketDataRateLimitError`, `MarketDataAuthError` |
 | `cache.py` | `PriceCache` — thread-safe price store with version counter for SSE change detection |
 | `seed_prices.py` | Realistic seed prices, per-ticker GBM params (drift/volatility), correlation groups |
 | `simulator.py` | `GBMSimulator` (Geometric Brownian Motion with Cholesky-correlated moves) + `SimulatorDataSource` |
 | `massive_client.py` | `MassiveDataSource` — REST polling client for Polygon.io via the `massive` package |
-| `factory.py` | `create_market_data_source()` — selects simulator or Massive based on `MASSIVE_API_KEY` env var |
+| `factory.py` | `create_market_data_source()` — simulator or Massive (`MASSIVE_API_KEY`, `MASSIVE_POLL_INTERVAL` default 5s); `start_market_data_source()` — create + start, falls back to the simulator on 401/403 |
 | `stream.py` | `create_stream_router()` — FastAPI SSE endpoint factory using version-based change detection |
 
 ### Key Design Decisions
@@ -42,9 +42,20 @@ MarketDataSource (ABC)
 - **Random shock events** — ~0.1% chance per tick per ticker of a 2-5% move for visual drama
 - **SSE over WebSockets** — simpler, one-way push, universal browser support
 
+## PLAN §6 Required Changes (done)
+
+- `PriceUpdate.session_open` field; `to_dict()` adds `session_open` and `session_change_percent`
+- `PriceCache.update(..., session_open=None)`: first write uses the explicit value if > 0, else the price; later writes carry it forward. `remove()` drops the ticker and bumps `version`
+- `validate_ticker()`: simulator always `True`; Massive does a one-off single-ticker snapshot in a thread — found → writes price (with `prev_day.close` as session open) and returns `True`; 404/no data → `False`; 429 → `MarketDataRateLimitError`; other failures → `MarketDataError`
+- Simulator start prices: `initial_prices` → `SEED_PRICES` → `seed_price_for()` (SHA-256 of the ticker mapped into $50–300, stable across restarts)
+- Massive: timestamps are nanoseconds (`last_trade.sip_timestamp / 1e9` — the library's `LastTrade` has no `timestamp` attribute, which the old code relied on); `prev_day.close` is the session open; first poll in `start()` raises `MarketDataAuthError` on 401/403. Requests go through the `RESTClient` connection pool directly with retries disabled, because the library's helpers hide HTTP status codes (`BadResponse`) and auto-retry 429s
+- `create_stream_router()` builds a new `APIRouter` per call; the stream sends `retry: 1000` first, then a full snapshot whenever the cache version changes
+
 ## Test Suite
 
-**73 tests, all passing.** 6 test modules in `backend/tests/market/`.
+6 original test modules in `backend/tests/market/` (Massive mocks now use real `TickerSnapshot` objects with nanosecond timestamps) plus `test_session_and_lifecycle.py` for the §6 additions. Run `uv run --extra dev pytest tests/market`.
+
+Original coverage at completion (73 tests):
 
 | Module | Tests | Coverage |
 |--------|-------|----------|
@@ -75,7 +86,7 @@ A Rich terminal demo is available at `backend/market_data_demo.py`:
 
 ```bash
 cd backend
-uv run market_data_demo.py
+uv run --extra dev market_data_demo.py   # rich is a dev dependency
 ```
 
 Displays a live-updating dashboard with all 10 tickers, sparklines, color-coded direction arrows, and an event log for notable price moves. Runs 60 seconds or until Ctrl+C.
@@ -83,19 +94,22 @@ Displays a live-updating dashboard with all 10 tickers, sparklines, color-coded 
 ## Usage for Downstream Code
 
 ```python
-from app.market import PriceCache, create_market_data_source
+from app.market import PriceCache, start_market_data_source
 
 # Startup
 cache = PriceCache()
-source = create_market_data_source(cache)  # Reads MASSIVE_API_KEY
-await source.start(["AAPL", "GOOGL", "MSFT", ...])
+source = await start_market_data_source(
+    cache, ["AAPL", "GOOGL", "MSFT", ...], initial_prices={"AAPL": 191.2}
+)  # Reads MASSIVE_API_KEY; falls back to the simulator on 401/403
 
 # Read prices
 update = cache.get("AAPL")          # PriceUpdate or None
 price = cache.get_price("AAPL")     # float or None
 all_prices = cache.get_all()        # dict[str, PriceUpdate]
 
-# Dynamic watchlist
+# Dynamic tracked set (watchlist ∪ positions — managed by app.services)
+if not await source.validate_ticker("PYPL"):  # only for untracked tickers
+    ...
 await source.add_ticker("TSLA")
 await source.remove_ticker("GOOGL")
 
